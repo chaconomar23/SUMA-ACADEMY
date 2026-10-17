@@ -1,0 +1,84 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection testing endpoint
+    match /test/connection {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'chaconomar411@gmail.com' && request.auth.token.email_verified == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidLesson(data) {
+      return data.keys().hasAll(['title', 'summary', 'content', 'category', 'isDaily', 'authorId']) &&
+             data.keys().hasOnly(['title', 'summary', 'content', 'category', 'youtubeUrl', 'resources', 'isDaily', 'publishedAt', 'readTimeMinutes', 'author', 'authorEmail', 'authorId', 'order', 'createdAt', 'updatedAt']) &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 200 &&
+             data.summary is string && data.summary.size() <= 600 &&
+             data.content is string && data.content.size() <= 30000 &&
+             data.category is string && data.category.size() <= 60 &&
+             data.isDaily is bool &&
+             data.authorId is string && data.authorId == request.auth.uid &&
+             (!('youtubeUrl' in data) || (data.youtubeUrl is string && data.youtubeUrl.size() <= 500)) &&
+             (!('publishedAt' in data) || (data.publishedAt is string && data.publishedAt.size() <= 100)) &&
+             (!('readTimeMinutes' in data) || (data.readTimeMinutes is number && data.readTimeMinutes >= 0 && data.readTimeMinutes <= 300)) &&
+             (!('author' in data) || (data.author is string && data.author.size() <= 100)) &&
+             (!('authorEmail' in data) || (data.authorEmail is string && data.authorEmail.size() <= 128)) &&
+             (!('order' in data) || (data.order is number)) &&
+             (!('resources' in data) || (data.resources is list && data.resources.size() <= 20)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp) &&
+             (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && (request.auth.uid == adminId || isAdmin());
+      allow list, write: if false;
+    }
+
+    match /lessons/{lessonId} {
+      // Lessons are public so all students and visitors can learn without barriers
+      allow get, list: if true;
+
+      // Only authenticated admin can create, update, or delete lessons
+      allow create: if isValidId(lessonId) &&
+                       isAdmin() &&
+                       isValidLesson(incoming()) &&
+                       (!('createdAt' in incoming()) || incoming().createdAt == request.time);
+
+      allow update: if isValidId(lessonId) &&
+                       isAdmin() &&
+                       isValidLesson(incoming()) &&
+                       incoming().authorId == existing().authorId &&
+                       (!('createdAt' in incoming()) || incoming().createdAt == existing().createdAt) &&
+                       (!('updatedAt' in incoming()) || incoming().updatedAt == request.time);
+
+      allow delete: if isValidId(lessonId) && isAdmin();
+    }
+  }
+}
